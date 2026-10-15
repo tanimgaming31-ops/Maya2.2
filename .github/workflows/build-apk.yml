@@ -1,0 +1,91 @@
+name: Build Maya 2 Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'setup-native.sh'
+      - 'package.json'
+      - 'capacitor.config.json'
+      - 'manifest.webmanifest'
+      - 'sw.js'
+      - 'icon-*.png'
+      - 'maya-debug.keystore'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Get Maya source
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare web app
+        run: |
+          mkdir -p www
+          cp index.html manifest.webmanifest sw.js icon-192.png icon-512.png www/
+
+      - name: Install Capacitor
+        run: npm install --no-audit --no-fund
+
+      - name: Create Android project
+        run: npx cap add android
+
+      - name: Add Maya 2 phone controls, message notifications and background wake service
+        run: bash setup-native.sh
+
+      - name: Enable camera and microphone permissions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('android/app/src/main/AndroidManifest.xml')
+          s = path.read_text()
+          for name in ('RECORD_AUDIO', 'MODIFY_AUDIO_SETTINGS', 'CAMERA'):
+              v = 'android.permission.' + name
+              if 'android:name="' + v + '"' not in s:
+                  s = s.replace('<application', '    <uses-permission android:name="' + v + '" />\n    <application', 1)
+          path.write_text(s)
+          PY
+
+      - name: Sync assets and plugins
+        run: npx cap sync android
+
+      - name: Build installable debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk Maya-2.apk
+
+      - name: Save downloadable APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Maya-2-Android-APK
+          path: Maya-2.apk
+          if-no-files-found: error
+
+      - name: Publish APK release on manual build
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="maya2-${{ github.run_number }}-${{ github.run_attempt }}"
+          gh release create "$TAG" Maya-2.apk --title "Maya 2 Android $TAG" \
+            --notes "Experimental background speech recognition requires opt-in, microphone and notification permissions. Notification read/reply requires notification access. Debug APK for personal testing."
