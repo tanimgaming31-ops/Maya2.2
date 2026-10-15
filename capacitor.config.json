@@ -1,0 +1,8 @@
+{
+  "appId": "com.tanim.maya2",
+  "appName": "Maya 2",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}
