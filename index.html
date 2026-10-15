@@ -104,6 +104,10 @@ input[type=range]{width:130px;accent-color:var(--c)}
 .mem{display:flex;gap:8px;align-items:center;margin:8px 0}
 .mem .inp{flex:1;max-width:none;min-width:0}
 .mem button{width:38px;height:38px;border-radius:10px;border:1px solid #ff5c6c;background:rgba(255,92,108,.1);color:#ffc9cf;flex:none}
+.mem-entry{display:flex;flex-direction:column;gap:6px;padding:8px 0;border-bottom:1px solid var(--line)}
+.mem-entry .mem{margin:0}
+.mem-entry select{font-size:12px;max-width:130px}
+#memFilter{max-width:124px}#diagnostics{white-space:pre-line;line-height:1.75;margin:10px 0}#runDiagnostics{margin-top:8px}
 .empty{color:var(--dim);font-size:14px;padding:14px 0;text-align:center}
 #dlg{z-index:80;align-items:center;justify-content:center;padding:24px}
 #dlg .body{border-radius:20px;border:1px solid var(--line);max-width:420px;padding:20px}
@@ -218,6 +222,7 @@ input[type=range]{width:130px;accent-color:var(--c)}
 <input id="fileCam" type="file" accept="image/*" capture="environment" hidden>
 <input id="fileGal" type="file" accept="image/*" hidden>
 <input id="fileImp" type="file" accept="application/json,.json" hidden>
+<input id="fileProfile" type="file" accept="application/json,.json" hidden>
 
 <div id="setSheet" class="sheet"><div class="body">
   <div class="hd"><h2>Settings</h2><button class="x" data-close="setSheet" aria-label="Close">✕</button></div>
@@ -268,12 +273,21 @@ input[type=range]{width:130px;accent-color:var(--c)}
   <div class="row"><div>Night hello<small>She asks how your day was.</small></div><div style="display:flex;gap:8px;align-items:center"><input type="time" class="inp" data-set="nudgeNightTime" style="max-width:112px"><input type="checkbox" class="sw" data-set="nudgeNight"></div></div>
 
   <h3>Look</h3>
-  <div class="row"><div>Character style<small>Switch between a cute anime look and a more realistic 3D-style girl.</small></div><select data-set="avatar"><option value="anime">Cute Anime Girl</option><option value="realistic">Realistic 3D Girl</option></select></div>
+  <div class="row"><div>Character style<small>Two lightweight animated 2D looks. True 3D needs a separate model (planned for a later stage).</small></div><select data-set="avatar"><option value="anime">Cute Anime Girl</option><option value="realistic">Realistic-style Girl (2D)</option></select></div>
   <div class="row"><div>Animations</div><input type="checkbox" class="sw" data-set="anim"></div>
   <div class="row"><div>Character glow</div><input type="range" min="0" max="100" data-set="glow"></div>
   <div class="row"><div>Background theme<small>You can also say “change background to purple”.</small></div>
     <select data-set="theme"><option value="cyan">Cyan</option><option value="purple">Purple</option><option value="pink">Pink</option><option value="blue">Blue</option><option value="green">Green</option><option value="gold">Gold</option><option value="red">Red</option><option value="white">Ice white</option><option value="custom">Custom (voice)</option></select></div>
 
+  <h3>Memory &amp; privacy</h3>
+  <div class="row"><div>Automatically remember durable facts<small>Turn off to stop automatic AI memory updates. Manual memory editing still works.</small></div><input type="checkbox" class="sw" data-set="memAuto"></div>
+  <div class="row"><div>Use saved memories in Gemini replies<small>Off means saved memories stay on your phone and are not included as memory context in new AI requests.</small></div><input type="checkbox" class="sw" data-set="memInPrompt"></div>
+  <div class="krow"><button class="btn" id="backupProfile">Backup settings &amp; memories</button><button class="btn" id="restoreProfile">Restore backup</button></div>
+  <p class="note">Profile backups exclude your Gemini API key. Save the JSON file privately. Your microphone audio, messages you send and other necessary request data still go to Gemini during active calls.</p>
+  <h3>App diagnostics</h3>
+  <p class="note">Check which device/browser APIs exist and the permissions they report. This does not start the mic or camera and does not test a voice call.</p>
+  <button class="btn" id="runDiagnostics">Check my phone</button>
+  <div id="diagnostics" class="msg" role="status" aria-live="polite">Not checked yet.</div>
   <h3>Data</h3>
   <div class="krow"><button class="btn" id="openMem">Open memory</button><button class="btn bad" id="resetAll">Erase all data</button></div>
   <p class="note">Memories, settings and your key live on this device. During AI calls, your voice and relevant context are sent to Google Gemini; background wake speech may be processed by your phone’s speech provider.</p>
@@ -281,7 +295,9 @@ input[type=range]{width:130px;accent-color:var(--c)}
 
 <div id="memSheet" class="sheet"><div class="body">
   <div class="hd"><h2>Memory</h2><button class="x" data-close="memSheet" aria-label="Close">✕</button></div>
-  <p class="msg">Things Maya remembers. Edit a line and tap away to save.</p>
+  <p class="msg">Things Maya remembers. Search, filter, edit, or delete. These are kept on this device.</p>
+  <div class="row" style="gap:8px"><input id="memSearch" class="inp" type="search" placeholder="Find a memory…" aria-label="Search memories" style="flex:1;min-width:0"><select id="memFilter" aria-label="Filter memories"><option value="all">All</option><option value="name">Name</option><option value="like">Likes</option><option value="dislike">Dislikes</option><option value="person">People</option><option value="plan">Plans</option><option value="routine">Routines</option><option value="other">Other</option></select></div>
+  <div id="memCount" class="msg" role="status" aria-live="polite"></div>
   <div id="memList"></div>
   <div class="mem"><input id="memNew" class="inp" type="text" placeholder="Add a memory…" maxlength="200"><button id="memAdd" style="border-color:var(--c);background:rgba(var(--rgb),.15);color:var(--ink)">+</button></div>
   <div class="krow"><button class="btn" id="memExport">Export</button><button class="btn" id="memImport">Import</button><button class="btn bad" id="memClear">Clear all</button></div>
@@ -333,11 +349,12 @@ function cleanFact(raw) {
   return { ok:true, text:t };
 }
 const normText = s => String(s).toLowerCase().normalize('NFC').replace(/[^\p{L}\p{N}\p{M}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+const MEMORY_CATEGORIES = Object.freeze(['name','like','dislike','person','plan','routine','other']);
 function addMemoryItem(list, text, category, now, idgen) {
   const c = cleanFact(text); if (!c.ok) return { list, status:'rejected', reason:c.reason };
   const n = normText(c.text);
   if (list.some(m => normText(m.text) === n)) return { list, status:'duplicate' };
-  const item = { id:idgen(), text:c.text, category:category || 'other', ts:now };
+  const item = { id:idgen(), text:c.text, category:MEMORY_CATEGORIES.includes(category) ? category : 'other', ts:now };
   return { list:list.concat([item]).slice(-200), status:'saved', item };
 }
 function applyMemoryOps(list, ops, now, idgen) {
@@ -668,7 +685,7 @@ const LS = {
   set(k, v) { try { localStorage.setItem('maya.' + k, JSON.stringify(v)); } catch (e) { toast('Could not save on this device (storage blocked or full).', 'err'); } },
   del(k) { try { localStorage.removeItem('maya.' + k); } catch (e) {} }
 };
-const DEFAULTS = { wake:false, bgWakeEnabled:false, wakePhrase:'hey maya', sens:50, anim:true, glow:60, lang:'auto', theme:'cyan', customHex:null, voice:'Aoede', engine:'auto', model:'', interrupt:true, keepAwake:true, msgAlerts:true, persona:'maya', avatar:'anime', nudgeMorning:false, nudgeMorningTime:'08:00', nudgeNight:false, nudgeNightTime:'22:00' };
+const DEFAULTS = { wake:false, bgWakeEnabled:false, wakePhrase:'hey maya', sens:50, anim:true, glow:60, lang:'auto', theme:'cyan', customHex:null, voice:'Aoede', engine:'auto', model:'', interrupt:true, keepAwake:true, msgAlerts:true, persona:'maya', avatar:'anime', memAuto:true, memInPrompt:true, nudgeMorning:false, nudgeMorningTime:'08:00', nudgeNight:false, nudgeNightTime:'22:00' };
 let S = Object.assign({}, DEFAULTS, LS.get('settings', {}));
 if (LS.get('settings', null) === null && matchMedia('(prefers-reduced-motion: reduce)').matches) S.anim = false;
 const saveS = () => LS.set('settings', S);
@@ -725,7 +742,7 @@ function setStyleAttr(id, prop, value) {
 function applyAvatar() {
   const mode = S.avatar === 'realistic' ? 'realistic' : 'anime';
   const maya = $('#maya');
-  if (maya) maya.setAttribute('aria-label', mode === 'realistic' ? 'Maya, your realistic 3D-style companion' : 'Maya, your cute anime companion');
+  if (maya) maya.setAttribute('aria-label', mode === 'realistic' ? 'Maya, your realistic-style 2D companion' : 'Maya, your cute anime companion');
   const eyes = {
     lWhite: document.querySelector('#eoL > ellipse'),
     rWhite: document.querySelector('#eoR > ellipse'),
@@ -806,7 +823,7 @@ function applyAvatar() {
 function applySettings(k) {
   applyTheme(); if (k === 'theme' && S.theme !== 'custom') { S.customHex = null; saveS(); } if (k === 'wake') Wake.sync();
   if (k === 'persona') { const P = PERSONAS[S.persona]; if (P) { S.voice = P.voice; saveS(); const v = $('[data-set=voice]'); if (v) v.value = S.voice; toast(P.name + (app.active ? ' will take over on your next call.' : ' is ready.'), 'ok', 2200); } }
-  if (k === 'avatar') { applyAvatar(); toast(S.avatar === 'realistic' ? 'Realistic 3D Girl is ready.' : 'Cute Anime Girl is ready.', 'ok', 2200); }
+  if (k === 'avatar') { applyAvatar(); toast(S.avatar === 'realistic' ? 'Realistic-style Girl (2D) is ready.' : 'Cute Anime Girl is ready.', 'ok', 2200); }
   if (k && k.indexOf('nudge') === 0) syncNudges(true);
 }
 function bindSettings() {
@@ -951,7 +968,7 @@ function buildSetup(model, level, handle) {
   const resumed = level === 0 && handle;
   const setup = { model:'models/' + model,
     generationConfig:{ responseModalities:['AUDIO'], speechConfig:{ voiceConfig:{ prebuiltVoiceConfig:{ voiceName:S.voice || 'Aoede' } } } },
-    systemInstruction:{ parts:[{ text:buildSystemPrompt({ memories:getMem(), lang:S.lang, recap:resumed ? [] : app.transcript, native:hasNative(), persona:S.persona }) }] }, tools:toolDeclarations(hasNative()) };
+    systemInstruction:{ parts:[{ text:buildSystemPrompt({ memories:S.memInPrompt ? getMem() : [], lang:S.lang, recap:resumed ? [] : app.transcript, native:hasNative(), persona:S.persona }) }] }, tools:toolDeclarations(hasNative()) };
   if (level < 2) { setup.inputAudioTranscription = {}; setup.outputAudioTranscription = {}; setup.realtimeInputConfig = { activityHandling:S.interrupt ? 'START_OF_ACTIVITY_INTERRUPTS' : 'NO_INTERRUPTION' }; }
   if (level < 1) { setup.sessionResumption = handle ? { handle } : {}; setup.contextWindowCompression = { slidingWindow:{} }; }
   return setup;
@@ -1039,7 +1056,7 @@ async function handleToolCall(tc) {
 /* ---- Tools ---- */
 async function runTool(name, args) {
   switch (name) {
-    case 'saveCustomMemory': { const r = addMemoryItem(getMem(), args.fact, args.category, Date.now(), newId); if (r.status === 'saved') { setMem(r.list); toast('Remembered: ' + r.item.text, 'ok', 2200); } return r.status === 'rejected' ? { status:'rejected', reason:r.reason } : { status:r.status }; }
+    case 'saveCustomMemory': { if (!S.memAuto) return { status:'disabled', reason:'Automatic memory saving is off in Settings.' }; const r = addMemoryItem(getMem(), args.fact, args.category, Date.now(), newId); if (r.status === 'saved') { setMem(r.list); toast('Remembered: ' + r.item.text, 'ok', 2200); } return r.status === 'rejected' ? { status:'rejected', reason:r.reason } : { status:r.status }; }
     case 'changeBackground': { const c = resolveColor(args.color); if (!c) return { status:'rejected', reason:'Unknown color. Try purple, pink, blue, cyan, green, gold, red, white or a hex code.' };
       if (c.name === 'custom') { S.theme = 'custom'; S.customHex = c.hex; } else { S.theme = c.name; S.customHex = null; } saveS(); applyTheme(); $('[data-set=theme]').value = S.theme; return { status:'ok', color:c.name }; }
     case 'lookThroughCamera': return await cameraLook();
@@ -1182,7 +1199,7 @@ const FB = {
   async turn() {
     let lastText = '';
     for (let i = 0; i < 4; i++) {
-      const data = await gen({ systemInstruction:{ parts:[{ text:buildSystemPrompt({ memories:getMem(), lang:S.lang, native:hasNative(), persona:S.persona }) }] }, contents:this.hist, tools:toolDeclarations(hasNative()), generationConfig:{ temperature:.9, maxOutputTokens:400 } });
+      const data = await gen({ systemInstruction:{ parts:[{ text:buildSystemPrompt({ memories:S.memInPrompt ? getMem() : [], lang:S.lang, native:hasNative(), persona:S.persona }) }] }, contents:this.hist, tools:toolDeclarations(hasNative()), generationConfig:{ temperature:.9, maxOutputTokens:400 } });
       const cand = data.candidates && data.candidates[0]; if (!cand || !cand.content || !cand.content.parts || !cand.content.parts.length) return lastText || 'Hmm… I could not answer that one.';
       this.hist.push(cand.content); const parts = cand.content.parts; const calls = parts.filter(p => p.functionCall);
       const text = parts.filter(p => p.text && !p.thought).map(p => p.text).join(' ').trim(); if (text) lastText = text; if (!calls.length) return text;
@@ -1252,6 +1269,7 @@ async function sendTyped() {
 
 /* ---- Memory ---- */
 async function memoryPass(tr) {
+  if (!S.memAuto || !S.memInPrompt) return;
   try {
     const turns = tr.filter(x => x.r === 'user'); if (turns.length < 2 || !getKey() || !navigator.onLine) return;
     const mem = getMem(); const convo = tr.slice(-40).map(x => (x.r === 'user' ? 'USER: ' : 'MAYA: ') + x.t).join('\n');
@@ -1263,16 +1281,129 @@ async function memoryPass(tr) {
   } catch (e) { console.warn('memory pass skipped', e); }
 }
 function renderMem() {
-  const L = getMem(); const box = $('#memList'); box.innerHTML = ''; if (!L.length) { box.innerHTML = '<div class="empty">Nothing yet. Tell Maya about yourself and she will remember.</div>'; return; }
-  L.slice().reverse().forEach(m => { const row = document.createElement('div'); row.className = 'mem'; const inp = document.createElement('input'); inp.className = 'inp'; inp.value = m.text; inp.maxLength = 200;
-    inp.onchange = () => { const c = cleanFact(inp.value); if (!c.ok) { toast('Not saved: ' + c.reason, 'err', 4000); inp.value = m.text; return; } const l = getMem(); const i = l.findIndex(x => x.id === m.id); if (i >= 0) { l[i].text = c.text; setMem(l); toast('Saved', 'ok', 1200); } };
-    const del = document.createElement('button'); del.textContent = '✕'; del.setAttribute('aria-label', 'Delete memory'); del.onclick = () => { setMem(getMem().filter(x => x.id !== m.id)); renderMem(); };
-    row.append(inp, del); box.append(row); });
+  const all = getMem();
+  const search = ($('#memSearch').value || '').trim().toLowerCase();
+  const category = $('#memFilter').value;
+  const shown = all.filter(m => (category === 'all' || (MEMORY_CATEGORIES.includes(m.category) ? m.category : 'other') === category) && (!search || m.text.toLowerCase().includes(search)));
+  const box = $('#memList'); box.replaceChildren();
+  $('#memCount').textContent = `${shown.length} shown · ${all.length}/200 saved`;
+  if (!shown.length) {
+    const empty = document.createElement('div'); empty.className = 'empty';
+    empty.textContent = all.length ? 'No matching memories.' : 'Nothing yet. Tell Maya about yourself and she will remember.';
+    box.appendChild(empty); return;
+  }
+  shown.slice().reverse().forEach(m => {
+    const wrap = document.createElement('div'); wrap.className = 'mem-entry';
+    const row = document.createElement('div'); row.className = 'mem';
+    const inp = document.createElement('input'); inp.className = 'inp'; inp.value = m.text; inp.maxLength = 200; inp.setAttribute('aria-label', 'Memory text');
+    inp.onchange = () => {
+      const c = cleanFact(inp.value);
+      if (!c.ok) { toast('Not saved: ' + c.reason, 'err', 4000); inp.value = m.text; return; }
+      const l = getMem(); const i = l.findIndex(x => x.id === m.id);
+      if (i >= 0) { l[i].text = c.text; l[i].ts = Date.now(); setMem(l); toast('Saved', 'ok', 1200); renderMem(); }
+    };
+    const del = document.createElement('button'); del.textContent = '✕'; del.setAttribute('aria-label', 'Delete memory');
+    del.onclick = () => { setMem(getMem().filter(x => x.id !== m.id)); renderMem(); };
+    row.append(inp, del);
+    const cat = document.createElement('select'); cat.setAttribute('aria-label', 'Memory category');
+    MEMORY_CATEGORIES.forEach(c => { const opt = document.createElement('option'); opt.value = c; opt.textContent = c[0].toUpperCase() + c.slice(1); cat.appendChild(opt); });
+    cat.value = MEMORY_CATEGORIES.includes(m.category) ? m.category : 'other';
+    cat.onchange = () => { const l = getMem(); const i = l.findIndex(x => x.id === m.id); if (i < 0) return; l[i].category = cat.value; setMem(l); renderMem(); };
+    wrap.append(row, cat); box.appendChild(wrap);
+  });
 }
+$('#memSearch').addEventListener('input', renderMem);
+$('#memFilter').addEventListener('change', renderMem);
 $('#memAdd').onclick = () => { const r = addMemoryItem(getMem(), $('#memNew').value, 'other', Date.now(), newId); if (r.status === 'saved') { setMem(r.list); $('#memNew').value = ''; renderMem(); } else toast(r.status === 'duplicate' ? 'Already remembered.' : 'Not saved: ' + r.reason, 'err', 3500); };
-$('#memExport').onclick = () => { const blob = new Blob([JSON.stringify({ app:'maya', exported:new Date().toISOString(), memories:getMem() }, null, 2)], { type:'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'maya-memories.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+function downloadJson(name, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+$('#memExport').onclick = () => downloadJson('maya-memories.json', { app:'maya', exported:new Date().toISOString(), memories:getMem() });
 $('#memImport').onclick = () => $('#fileImp').click();
-$('#fileImp').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; try { const j = JSON.parse(await f.text()); let L = getMem(), n = 0; for (const m of (j.memories || [])) { const r = addMemoryItem(L, m.text, m.category, Date.now(), newId); if (r.status === 'saved') { L = r.list; n++; } } setMem(L); renderMem(); toast('Imported ' + n + ' memories', 'ok'); } catch (err) { toast('That file is not a Maya memory export.', 'err'); } };
+async function readJsonFile(f) {
+  if (!f || f.size > 1024 * 1024) throw new Error('Choose a JSON file smaller than 1 MB.');
+  return JSON.parse(await f.text());
+}
+function safelyImportMemories(items, existing) {
+  if (!Array.isArray(items)) throw new Error('The file has no memories array.');
+  let L = existing.slice(), n = 0;
+  for (const m of items.slice(-200)) {
+    if (!m || typeof m.text !== 'string') continue;
+    const r = addMemoryItem(L, m.text, m.category, Date.now(), newId);
+    if (r.status === 'saved') { L = r.list; n++; }
+  }
+  return { list:L, count:n };
+}
+$('#fileImp').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try { const j = await readJsonFile(f); const r = safelyImportMemories(j.memories, getMem()); setMem(r.list); renderMem(); toast('Imported ' + r.count + ' memories', 'ok'); }
+  catch (err) { toast('Import failed: ' + String(err.message || err), 'err'); }
+};
+
+// Maya 3.0 Stage 1 profile backups deliberately EXCLUDE the API key.
+$('#backupProfile').onclick = () => downloadJson('maya3-profile-backup.json', {
+  app:'maya', format:'maya3-profile-v1', exported:new Date().toISOString(),
+  settings: Object.fromEntries(Object.keys(DEFAULTS).map(k => [k, S[k]])), memories:getMem()
+});
+$('#restoreProfile').onclick = () => $('#fileProfile').click();
+$('#fileProfile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const j = await readJsonFile(f);
+    if (j.format !== 'maya3-profile-v1' || !j.settings || typeof j.settings !== 'object' || Array.isArray(j.settings)) throw new Error('Not a Maya 3 profile backup.');
+    if (!Array.isArray(j.memories)) throw new Error('Missing memories array.');
+    const mem = safelyImportMemories(j.memories, []);
+    if (!(await ask('Restore Maya profile?', 'This replaces saved memories and appearance/settings on this device. Your current Gemini API key is not changed.', 'Restore', 'Cancel'))) return;
+    const safeKeys = Object.keys(DEFAULTS);
+    const restored = { ...DEFAULTS };
+    for (const k of safeKeys) {
+      if (!Object.prototype.hasOwnProperty.call(j.settings, k)) continue;
+      const v = j.settings[k];
+      if (k === 'customHex') { if (v === null || (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v))) restored[k] = v; }
+      else if (typeof v === typeof DEFAULTS[k]) restored[k] = v;
+    }
+    Object.assign(S, restored); saveS(); setMem(mem.list);
+    document.querySelectorAll('[data-set]').forEach(el => { const k = el.dataset.set; if (el.type === 'checkbox') el.checked = !!S[k]; else el.value = S[k] == null ? '' : S[k]; });
+    applyTheme(); applyAvatar(); renderMem();
+    toast('Profile restored. Reopen Settings if needed.', 'ok');
+  } catch (err) { toast('Restore failed: ' + String(err.message || err), 'err', 4400); }
+};
+async function permissionLabel(name) {
+  if (!navigator.permissions || !navigator.permissions.query) return 'permission status unavailable';
+  try { return (await navigator.permissions.query({ name })).state; }
+  catch (e) { return 'permission status unavailable'; }
+}
+$('#runDiagnostics').onclick = async () => {
+  const b = $('#runDiagnostics'); b.disabled = true;
+  const d = $('#diagnostics'); d.textContent = 'Checking device support…';
+  try {
+    const microphone = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    const camera = microphone;
+    const speech = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    const native = hasNative();
+    const lines = [
+      'Gemini key: ' + (getKey() ? 'Saved on this device (not tested here)' : 'Not set'),
+      'Microphone API: ' + (microphone ? 'available · ' + await permissionLabel('microphone') : 'not available'),
+      'Camera API: ' + (camera ? 'available · ' + await permissionLabel('camera') : 'not available'),
+      'Browser speech recognition: ' + (speech ? 'available' : 'not available'),
+      'Android native bridge: ' + (native ? 'present' : 'not available in this browser')
+    ];
+    if (native) {
+      try {
+        const x = NB.status();
+        lines.push('Notification access: ' + (x.notificationAccess ? 'enabled' : 'not enabled'));
+        if (typeof window.MayaBridge.capabilities === 'function') {
+          const c = JSON.parse(window.MayaBridge.capabilities());
+          lines.push('SMS permission: ' + (c.sms ? 'enabled' : 'not enabled'));
+          lines.push('Change brightness: ' + (c.writeSettings ? 'enabled' : 'not enabled'));
+        }
+      } catch (e) { lines.push('Native permissions: could not read current status'); }
+    }
+    d.textContent = lines.join('\n');
+  } catch (e) { d.textContent = 'Could not complete diagnostics: ' + String(e.message || e); }
+  finally { b.disabled = false; }
+};
 $('#memClear').onclick = async () => { if (await ask('Clear all memories?', 'Maya will forget everything she has saved about you. This cannot be undone.', 'Clear', 'Keep')) { setMem([]); renderMem(); } };
 
 /* ---- API key manager ---- */
