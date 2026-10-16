@@ -1,0 +1,41 @@
+name: Build Maya with Aaiyra Native Voice
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Prepare Android SDK platform
+        run: sdkmanager --install 'platforms;android-35'
+      - name: Extract Native Voice source
+        run: unzip -q -o aaiyra-native-src.zip -d aaiyra-native-src
+      - name: Prepare EXISTING Maya 4 web assets
+        run: |
+          mkdir -p www
+          cp index.html manifest.webmanifest sw.js icon-192.png icon-512.png www/
+          for p in maya4.js maya4.css maya.vrm; do if [ -f "$p" ]; then cp "$p" www/; fi; done
+      - name: Install and generate Capacitor Android (unchanged original)
+        run: |
+          npm install --no-audit --no-fund
+          npx cap add android
+          bash setup-native.sh
+          npx cap sync android
+      - name: Add Kotlin Compose Aaiyra voice overlay
+        run: python3 aaiyra-native-src/aaiyra_patch.py
+      - name: Build Android APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Save Maya and Aaiyra APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Maya-Aaiyra-Native-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
