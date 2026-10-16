@@ -13,12 +13,9 @@ jobs:
         with:
           persist-credentials: true
       - name: Setup Python
-        
-      - name: Install Android SDK command-line tools
-        uses: android-actions/setup-android@v3
-      - name: Prepare Android SDK platform
-        run: sdkmanager --install 'platforms;android-35'
-       python-version: '3.11'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
