@@ -1,11 +1,10 @@
 {
-  "name": "Maya 2 — Voice Companion",
-  "short_name": "Maya 2",
-  "description": "A caring voice companion you talk to like a call.",
-  "start_url": "./",
+  "name": "Maya \u2014 AI Voice Companion",
+  "short_name": "Maya",
+  "description": "3D VRM voice companion with Gemini-powered voice chat",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
   "background_color": "#020205",
   "theme_color": "#020205",
   "icons": [
@@ -13,19 +12,13 @@
       "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
+      "purpose": "any maskable"
     }
   ]
 }
