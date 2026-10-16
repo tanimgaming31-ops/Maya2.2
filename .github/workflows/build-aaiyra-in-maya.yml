@@ -32,6 +32,34 @@ jobs:
           npx cap sync android
       - name: Add Kotlin Compose Aaiyra voice overlay
         run: python3 aaiyra-native-src/aaiyra_patch.py
+      - name: Fix Maya WebView microphone permissions
+        run: |
+          python3 - <<'PYFIX'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          path = Path('android/app/src/main/AndroidManifest.xml')
+          manifest = path.read_text(encoding='utf-8')
+          permissions = (
+              'android.permission.RECORD_AUDIO',
+              'android.permission.MODIFY_AUDIO_SETTINGS',
+          )
+          for permission in permissions:
+              if f'android:name="{permission}"' not in manifest:
+                  assert '<application' in manifest, 'Invalid AndroidManifest: <application> not found'
+                  manifest = manifest.replace(
+                      '<application',
+                      f'<uses-permission android:name="{permission}" />\n    <application',
+                      1,
+                  )
+          path.write_text(manifest, encoding='utf-8')
+          root = ET.parse(path).getroot()
+          attr = '{http://schemas.android.com/apk/res/android}name'
+          actual = {el.get(attr) for el in root.findall('uses-permission')}
+          missing = set(permissions) - actual
+          if missing:
+              raise SystemExit('Android microphone permissions missing: ' + repr(missing))
+          print('Maya microphone permissions verified:', ', '.join(permissions))
+          PYFIX
       - name: Build Android APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
