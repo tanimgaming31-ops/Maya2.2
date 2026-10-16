@@ -13,6 +13,8 @@ jobs:
         with: { distribution: temurin, java-version: '17' }
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
+      - name: Install Android SDK command-line tools
+        uses: android-actions/setup-android@v3
       - name: Prepare Android SDK platform
         run: sdkmanager --install 'platforms;android-35'
       - name: Extract Native Voice source
