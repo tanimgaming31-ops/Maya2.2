@@ -32,6 +32,128 @@ jobs:
           npx cap sync android
       - name: Add Kotlin Compose Aaiyra voice overlay
         run: python3 aaiyra-native-src/aaiyra_patch.py
+        
+      - name: Fix Maya and Aaiyra voice coordination
+        run: |
+          python3 - <<'PYVOICE'
+          from pathlib import Path
+
+          root = Path('android/app/src/main/java/com/tanim/maya2')
+          native = root / 'aaiyra'
+
+          def fix(path, old, new):
+              data = path.read_text(encoding='utf-8')
+              if data.count(old) != 1:
+                  raise SystemExit(f'Voice patch mismatch: {path.name}')
+              path.write_text(data.replace(old, new, 1), encoding='utf-8')
+              print('Fixed:', path.name)
+
+          player = native / 'audio/PcmPlayer.kt'
+
+          fix(player,
+              '    private val thread = Thread({',
+              '    private val sentFrames = java.util.concurrent.atomic.AtomicLong(0)\n'
+              '    private val voiceEpoch = java.util.concurrent.atomic.AtomicInteger(0)\n'
+              '    @Volatile private var writingFrame = false\n'
+              '    private val thread = Thread({')
+
+          fix(player,
+              'val frame=queue.take(); var offset=0',
+              'val frame=queue.take(); writingFrame=true; var offset=0')
+
+          fix(player,
+              '                offset+=written',
+              '                offset+=written\n'
+              '                sentFrames.addAndGet(written.toLong()/2L)')
+
+          fix(player,
+              '            AssistantBus.update{it.copy(outputLevel=0f)}\n'
+              '        }}catch',
+              '            writingFrame=false\n'
+              '            AssistantBus.update{it.copy(outputLevel=0f)}\n'
+              '        }}catch')
+
+          fix(player,
+              '        if(bytes.isEmpty())return',
+              '        if(bytes.isEmpty())return\n'
+              '        voiceEpoch.incrementAndGet()')
+
+          method = '''
+              fun markTurnComplete() {
+                  val epoch = voiceEpoch.get()
+                  Thread({
+                      try {
+                          var checks = 0
+                          while (alive.get() && voiceEpoch.get() == epoch && checks++ < 400) {
+                              val played = player.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                              if (queue.isEmpty() && !writingFrame &&
+                                  played + 240L >= sentFrames.get()) {
+                                  AssistantBus.update {
+                                      if (it.sessionConnected)
+                                          it.copy(status="Listening", outputLevel=0f)
+                                      else it
+                                  }
+                                  break
+                              }
+                              Thread.sleep(50)
+                          }
+                      } catch (_: InterruptedException) {}
+                  }, "Aaiyra-AudioFinish").apply { isDaemon=true; start() }
+              }
+          '''
+
+          fix(player,
+              '    @Synchronized fun interrupt()',
+              method + '\n    @Synchronized fun interrupt()')
+
+          fix(player,
+              'interrupt(){queue.clear();try{player.pause();player.flush();player.play()}',
+              'interrupt(){voiceEpoch.incrementAndGet();queue.clear();'
+              'try{player.pause();player.flush();'
+              'sentFrames.set(player.playbackHeadPosition.toLong() and 0xFFFFFFFFL);'
+              'player.play()}')
+
+          live = native / 'live/LiveSessionManager.kt'
+          fix(live,
+              'if(server.optBoolean("turnComplete"))AssistantBus.update{it.copy(status="Listening")}',
+              'if(server.optBoolean("turnComplete"))player?.markTurnComplete()')
+
+          service = native / 'service/BackgroundAudioService.kt'
+          fix(service,
+              '                        if(level>0.08 && AssistantBus.states.value.outputLevel>0.07f)live.interrupt()\n',
+              '')
+
+          fix(service,
+              '        if(working.get())return\n        if(ContextCompat',
+              '        if(working.get())return\n'
+              '        try { stopService(Intent(this, com.tanim.maya2.MayaBackgroundListening::class.java)) } catch (_: Exception) {}\n'
+              '        if(ContextCompat')
+
+          ui = native / 'ui/MainActivity.kt'
+          fix(ui,
+              'TextButton(onClick={screen="classic"})',
+              'TextButton(onClick={vm.stop();screen="classic"})')
+
+          classic = root / 'MainActivity.java'
+          fix(classic,
+              '        super.onCreate(savedInstanceState);\n'
+              '        MayaBridge.attach',
+              '        super.onCreate(savedInstanceState);\n'
+              '        stopService(new Intent(this, com.tanim.maya2.aaiyra.service.BackgroundAudioService.class));\n'
+              '        MayaBridge.attach')
+
+          web = Path('www/index.html')
+          fix(web,
+              '  try { await Player.init(); } catch (e) {}\n  keepAwake(true);',
+              '  try { await Player.init(); } catch (e) {\n'
+              '    endCall(true);\n'
+              '    showError("speaker", "Audio playback failed: " + (e.message || e));\n'
+              '    return;\n'
+              '  }\n  keepAwake(true);')
+
+          print('Voice coordination patch applied')
+          PYVOICE
+
       - name: Fix Maya WebView microphone permissions
         run: |
           python3 - <<'PYFIX'
