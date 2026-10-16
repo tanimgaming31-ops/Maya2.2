@@ -187,6 +187,7 @@ body.noanim #mayaPhotoTilt {transition:none;transform:none;}
 #maya3dFallbackMessage{position:absolute;bottom:5px;font-size:12px;color:var(--dim);pointer-events:none;text-align:center}
 </style>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"}}</script>
+<link rel="stylesheet" href="maya4.css">
 </head>
 <body>
 <div id="app">
@@ -615,6 +616,26 @@ window.MayaCustomAvatar={ready:false,loaded:false,visible:false,lastError:'',sho
   headRest=head?.quaternion.clone();chestRest=chest?.quaternion.clone();
   sourceScene.traverse(n=>{if(n.isBone && /J_Sec_Hair1_|Hair\d+_0[1-9]/i.test(n.name||''))hairBones.push({bone:n,q:n.quaternion.clone()});});
   let clips=gltf.animations||[];const idle=clips.find(c=>/idle|breathe|stand/i.test(c.name));if(idle){mixer=new THREE.AnimationMixer(o);mixer.clipAction(idle).play();}
+  // Maya 4 VRM palette: matches named Hair/Clothes materials; restores originals on request.
+  const maya4OriginalMaterials=new Map();
+  api.setPalette=function(opts){
+    if(!sourceScene)return {message:'No VRM loaded.'};
+    let changed=0;
+    sourceScene.traverse(obj=>{
+      if(!obj.isMesh)return;
+      const mats=Array.isArray(obj.material)?obj.material:[obj.material];
+      for(const mat of mats){if(!mat||!mat.color)return;
+        const name=(String(obj.name||'')+' '+String(mat.name||'')).toLowerCase();
+        const group=/hair|bang|fringe|ponytail/.test(name)?'hair':/coat|outfit|cloth|jacket|dress|skirt|shirt|top|sweater/.test(name)?'outfit':null;
+        if(!group)continue;
+        if(!maya4OriginalMaterials.has(mat))maya4OriginalMaterials.set(mat,mat.color.clone());
+        if(opts.reset){mat.color.copy(maya4OriginalMaterials.get(mat));changed++;}
+        else if(/^#[0-9a-f]{6}$/i.test(opts[group]||'')){mat.color.set(opts[group]);changed++;}
+        mat.needsUpdate=true;
+      }
+    });
+    return {changed,message:changed?changed+' compatible material(s) updated.':'This VRM has no color-editable named hair/outfit materials.'};
+  };
   api.loaded=true;api.lastError='';
   const info=(detected.vrm?'VRM 0.x':'GLB')+' • '+(detected.rig?'Body rig ✓':'No body rig')+' • '+(detected.blink?'Blink ✓':'Blink unavailable')+' • '+(detected.mouth?'Mouth shapes ✓':'Lip shapes unavailable');
   setStatus('Maya ready: '+name+' — '+info+(detected.mouth?' • Audio-level lip motion':'')+'.');
@@ -633,7 +654,7 @@ window.MayaCustomAvatar={ready:false,loaded:false,visible:false,lastError:'',sho
       // Mouth shapes are driven by energy and a changing pseudo-phoneme;
       // this does NOT claim word-aligned lip-sync.
       const cycle=Math.floor(t/160)%9;const keys=['a','a','i','a','o','u','a','e','a'];
-      active.set(keys[cycle],lip);
+      const mapped=window.Maya4Viseme?.(t);active.set(mapped?.key||keys[cycle],lip*(mapped?.gain??1));
     }
     for(const [name,v] of active){for(const slot of vrmGroups.get(name)||[]){const {mesh,idx,weight}=slot;mesh.morphTargetInfluences[idx]=clamp(mesh.morphTargetInfluences[idx]+v*weight);}}
     return;
@@ -1037,6 +1058,12 @@ TOOLS
 - Phone controls: FLASHLIGHT_ON/OFF, MEDIA_PLAY/PAUSE/NEXT/PREVIOUS, CHANGE_MEDIA_VOLUME and CHANGE_BRIGHTNESS (pass level, or direction "up"/"down"), and SEND_SMS (needs the exact number the person said and their dictated text; confirm first like the other risky actions). If a result says needs_permission, softly tell them to allow it on the screen that just opened, then ask again. Do not read the whole result aloud.\n- If the app tells you a new message arrived, only say who wrote and ask if they want it read. Do not read the content until they say yes.`;
   if (mem) s += `\n\nWHAT YOU REMEMBER ABOUT THEM (use naturally, never recite as a list):\n${mem}`;
   if (o.recap && o.recap.length) s += `\n\nTHE CALL SO FAR (reconnected a moment ago, carry on naturally):\n` + o.recap.slice(-10).map(x => (x.r === 'user' ? 'Them: ' : 'You: ') + x.t).join('\n');
+  // Maya 4: opt-in conversational style (voice model still controls acoustic expression).
+  try {
+    const choice=JSON.parse(localStorage.getItem('maya4.settings')||'{}').voiceStyle;
+    const hints={gentle:'Speak softly, warmly and briefly.',calm:'Speak calmly, reassure without exaggerating.',playful:'Be gently playful while staying respectful.',focused:'Give clear, practical, concise replies.'};
+    if (hints[choice]) s+='\n\nMAYA 4 PERSONAL VOICE STYLE: '+hints[choice];
+  } catch (_maya4SettingError) {}
   return s;
 }
 function toolDeclarations(native) {
@@ -2087,5 +2114,6 @@ bindSettings(); applyTheme(); applyAvatar(); renderKey(); refreshNative(); refre
 if (!getKey()) { showSub('Hi… I’m Maya. Add your free Gemini key in Settings, and we can talk.'); } else { showSub('Tap the mic and talk to me…'); }
 if (S.wake) setTimeout(() => Wake.sync(), 600);
 </script>
+<script src="maya4.js" defer></script>
 </body>
 </html>
