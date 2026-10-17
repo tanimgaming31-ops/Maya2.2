@@ -154,6 +154,464 @@ jobs:
           print('Voice coordination patch applied')
           PYVOICE
 
+      - name: Unify native voice into Maya and change app icon
+        run: |
+          python3 - <<'PYUNIFY'
+          from pathlib import Path
+          import json, math, re, struct, zlib
+          import xml.etree.ElementTree as ET
+
+          root = Path('android/app/src/main/java/com/tanim/maya2')
+          native = root / 'aaiyra'
+
+          def replace(path, old, new):
+              path = Path(path)
+              s = path.read_text(encoding='utf-8')
+              if s.count(old) != 1:
+                  raise SystemExit('Integration anchor mismatch: ' + str(path))
+              path.write_text(s.replace(old, new, 1), encoding='utf-8')
+              print('Updated', path)
+
+          bridge = root / 'MayaNativeBridge.java'
+          bridge.write_text(r'''
+          package com.tanim.maya2;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.webkit.JavascriptInterface;
+          import androidx.core.content.ContextCompat;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+          import com.tanim.maya2.aaiyra.data.KeyVault;
+          import com.tanim.maya2.aaiyra.service.BackgroundAudioService;
+          import com.tanim.maya2.aaiyra.ui.AssistantBus;
+
+          public final class MayaNativeBridge {
+              private final Activity activity;
+              private static volatile String memoryContext = "";
+
+              public MayaNativeBridge(Activity activity) {
+                  this.activity = activity;
+              }
+
+              private static String reply(String status, String message) {
+                  try {
+                      return new JSONObject().put("status", status)
+                          .put("message", message).toString();
+                  } catch (Exception e) {
+                      return "{}";
+                  }
+              }
+
+              public static String contextForPrompt() {
+                  return memoryContext;
+              }
+
+              @JavascriptInterface
+              public String prepare(String key, String memories) {
+                  if (key == null || key.trim().isEmpty())
+                      return reply("error", "Enter your Gemini API key in Maya Settings.");
+                  try {
+                      new KeyVault(activity).save(key.trim());
+                      JSONArray a = new JSONArray(memories == null ? "[]" : memories);
+                      StringBuilder b = new StringBuilder();
+                      for (int i = 0; i < a.length() && i < 50; i++) {
+                          String item = a.optString(i, "").trim();
+                          if (!item.isEmpty()) {
+                              b.append("\n- ").append(item.substring(0, Math.min(200, item.length())));
+                          }
+                      }
+                      memoryContext = b.length() == 0 ? "" :
+                          "\nMaya's saved user memories, used as context:" + b;
+                      return reply("ok", "Maya voice ready.");
+                  } catch (Exception e) {
+                      return reply("error", "Cannot prepare native voice: " + e.getMessage());
+                  }
+              }
+
+              @JavascriptInterface
+              public String command(String action) {
+                  try {
+                      Intent i = new Intent(activity, BackgroundAudioService.class);
+                      if ("talk".equals(action) || "listen".equals(action)) {
+                          if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                              != PackageManager.PERMISSION_GRANTED) {
+                              activity.runOnUiThread(() -> activity.requestPermissions(
+                                  new String[]{Manifest.permission.RECORD_AUDIO}, 9362));
+                              return reply("permission", "Allow Microphone, then tap again.");
+                          }
+                          MayaBackgroundListening.stop(activity, false);
+                          i.setAction(BackgroundAudioService.START);
+                          ContextCompat.startForegroundService(activity, i);
+                          if ("talk".equals(action)) {
+                              Intent t = new Intent(activity, BackgroundAudioService.class);
+                              t.setAction(BackgroundAudioService.TALK);
+                              activity.startService(t);
+                          }
+                      } else if ("train".equals(action)) {
+                          i.setAction(BackgroundAudioService.TRAIN);
+                          activity.startService(i);
+                      } else if ("end".equals(action)) {
+                          i.setAction(BackgroundAudioService.END);
+                          activity.startService(i);
+                      } else if ("stop".equals(action)) {
+                          activity.stopService(i);
+                      } else {
+                          return reply("error", "Unknown command");
+                      }
+                      return reply("ok", "Command sent to Maya.");
+                  } catch (Exception e) {
+                      return reply("error", "Maya voice: " + e.getMessage());
+                  }
+              }
+
+              @JavascriptInterface
+              public String state() {
+                  try {
+                      AssistantBus.State s = AssistantBus.INSTANCE.getStates().getValue();
+                      JSONObject out = new JSONObject()
+                          .put("status", s.getStatus())
+                          .put("serviceRunning", s.getServiceRunning())
+                          .put("connected", s.getSessionConnected())
+                          .put("micLevel", s.getMicLevel())
+                          .put("outputLevel", s.getOutputLevel())
+                          .put("wakeReady", s.getWakeReady())
+                          .put("enrolling", s.getEnrolling())
+                          .put("details", s.getDetails());
+                      AssistantBus.Pending p = AssistantBus.INSTANCE.getPending().getValue();
+                      if (p != null) {
+                          out.put("pendingId", p.getCallId());
+                          out.put("pendingText", p.getExplanation());
+                      }
+                      return out.toString();
+                  } catch (Exception e) {
+                      return reply("error", e.getMessage());
+                  }
+              }
+
+              @JavascriptInterface
+              public void confirm(String id, boolean allowed) {
+                  BackgroundAudioService.Companion.confirm(id, allowed);
+              }
+          }
+          ''', encoding='utf-8')
+
+          activity = root / 'MainActivity.java'
+          replace(activity,
+              'MayaBridge.attach(this, getBridge().getWebView());',
+              'MayaBridge.attach(this, getBridge().getWebView());\n'
+              '        getBridge().getWebView().addJavascriptInterface('
+              'new MayaNativeBridge(this), "MayaVoice");')
+
+          live = native / 'live/LiveSessionManager.kt'
+          replace(live,
+              '.put("text",PROMPT)',
+              '.put("text",PROMPT + com.tanim.maya2.MayaNativeBridge.contextForPrompt())')
+          replace(live,
+              'You are Aaiyra inside Maya, a witty, confident, caring young-adult female voice companion. Speak naturally, be playful, teasing and slightly sassy without inappropriate content.',
+              'You are Maya, a young, sweet, gentle, caring female voice companion. Speak warmly and naturally, usually in one or two short sentences, sometimes playfully.')
+
+          for filename in ['audio/LocalWakeWord.kt',
+                           'service/BackgroundAudioService.kt']:
+              p = native / filename
+              t = p.read_text(encoding='utf-8')
+              for before, after in [
+                  ('Say Aaiyra three times', 'Say Maya three times'),
+                  ('Aaiyra wake trained', 'Maya wake trained'),
+                  ('Waiting for Aaiyra', 'Waiting for Maya'),
+                  ('Maya • Aaiyra Native Voice', 'Maya Native Voice'),
+                  ('Maya â¢ Aaiyra Native Voice', 'Maya Native Voice')
+              ]:
+                  t = t.replace(before, after)
+              p.write_text(t, encoding='utf-8')
+
+          page = Path('www/index.html')
+          insert = r'''
+          const MayaUnified = {
+            active:false, starting:0, pending:'',
+            available() {
+              return !!(window.MayaVoice && window.MayaVoice.command);
+            },
+            enabled() {
+              return this.available() && LS.get('nativeVoicePreferred', true);
+            },
+            command(cmd) {
+              try { return JSON.parse(window.MayaVoice.command(cmd)); }
+              catch(e) { return {status:'error', message:String(e)}; }
+            },
+            toggle() {
+              if(this.active) return this.stop();
+              if(!getKey()) {
+                showError('nokey','Add your Gemini API key in Settings.');
+                return;
+              }
+              const facts = S.memInPrompt
+                ? getMem().map(x => x.text).filter(Boolean).slice(-50)
+                : [];
+              let ready;
+              try {
+                ready = JSON.parse(window.MayaVoice.prepare(
+                  getKey(), JSON.stringify(facts)));
+              } catch(e) {
+                showError('native',String(e));
+                return;
+              }
+              if(ready.status !== 'ok') {
+                toast(ready.message || 'Voice setup failed.','err');
+                return;
+              }
+              const r = this.command('talk');
+              if(r.status !== 'ok') {
+                toast(r.message || 'Voice could not start.','err',5500);
+                return;
+              }
+              this.active = true;
+              this.starting = Date.now();
+              app.active = true;
+              app.mode = 'native';
+              setState('connecting','Connecting Maya Native Voice…');
+            },
+            stop() {
+              if(this.available()) this.command('stop');
+              this.active = false;
+              app.active = false;
+              app.mode = null;
+              this.pending = '';
+              setState('idle');
+              Puppet.setLevel(0,false);
+            },
+            async update() {
+              if(!this.available()) return;
+              let s;
+              try { s = JSON.parse(window.MayaVoice.state()); }
+              catch(e) { return; }
+              const info = document.getElementById('mayaNativeInfo');
+              if(info) info.textContent =
+                'Maya: ' + (s.status || 'Idle') +
+                (s.wakeReady ? ' · Wake word trained' : '');
+              if(s.connected && !this.active) {
+                this.active = true;
+                app.active = true;
+                app.mode = 'native';
+              }
+              if(this.active && !s.serviceRunning &&
+                 !s.connected && Date.now()-this.starting>6000) {
+                this.stop();
+                if(s.status && s.status !== 'Stopped')
+                  toast(s.status,'err',5000);
+                return;
+              }
+              if(this.active) {
+                let status = s.status || '';
+                if(status === 'Speaking') {
+                  if(app.state !== 'talking') setState('talking');
+                } else if(status === 'Listening') {
+                  if(app.state !== 'listening') setState('listening');
+                } else if(status.indexOf('Connecting') >= 0) {
+                  if(app.state !== 'connecting')
+                    setState('connecting',status);
+                } else if(status === 'Thinking') {
+                  if(app.state !== 'thinking') setState('thinking');
+                }
+                Puppet.setLevel(
+                  Math.min(1,Math.max(s.micLevel||0,s.outputLevel||0)*5),
+                  status === 'Speaking'
+                );
+              }
+              if(s.pendingId && s.pendingId !== this.pending) {
+                this.pending = s.pendingId;
+                const id = s.pendingId;
+                const ok = await ask(
+                  'Maya needs your approval',
+                  s.pendingText || 'Allow this phone action?',
+                  'Allow','Cancel'
+                );
+                window.MayaVoice.confirm(id,!!ok);
+                this.pending = '';
+              }
+            }
+          };
+
+          const nativeVoiceRow = document.createElement('div');
+          nativeVoiceRow.id = 'mayaNativeRow';
+          nativeVoiceRow.hidden = !MayaUnified.available();
+          nativeVoiceRow.innerHTML = `
+            <h3>Maya Native Voice</h3>
+            <div class="row">
+              <div>Use Android native voice for Maya</div>
+              <input id="mayaNativePreferred" type="checkbox" class="sw">
+            </div>
+            <div class="krow">
+              <button class="btn" id="mayaWakeEnable">Enable wake listening</button>
+              <button class="btn" id="mayaWakeTrain">Train “Maya” ×3</button>
+              <button class="btn bad" id="mayaWakeStop">Stop wake microphone</button>
+            </div>
+            <p class="note" id="mayaNativeInfo">Maya native voice is available.</p>
+            <p class="note">Wake matching is experimental. A microphone notification stays visible. Internet and your Gemini key are needed for AI conversation.</p>`;
+          const voiceHeader = Array.from(
+            document.querySelectorAll('#setSheet h3')
+          ).find(x => x.textContent.trim() === 'Voice');
+          if(voiceHeader) voiceHeader.after(nativeVoiceRow);
+          if(MayaUnified.available()) {
+            const preferred = document.getElementById('mayaNativePreferred');
+            preferred.checked = MayaUnified.enabled();
+            preferred.onchange = () => {
+              if(!preferred.checked && MayaUnified.active)
+                MayaUnified.stop();
+              LS.set('nativeVoicePreferred',preferred.checked);
+            };
+            document.getElementById('mayaWakeEnable').onclick = async () => {
+              const allowed = await ask('Enable Maya wake word?',
+                'This starts a visible Android microphone service until you turn it off.',
+                'Enable','Cancel');
+              if(allowed) {
+                const r = MayaUnified.command('listen');
+                toast(r.message || r.status);
+              }
+            };
+            document.getElementById('mayaWakeTrain').onclick = () => {
+              const s = JSON.parse(window.MayaVoice.state());
+              if(!s.serviceRunning) {
+                toast('First tap Enable wake listening.','err');
+                return;
+              }
+              MayaUnified.command('train');
+              toast('Say Maya three times, with a pause between each.');
+            };
+            document.getElementById('mayaWakeStop').onclick = () => {
+              MayaUnified.stop();
+              toast('Maya wake microphone stopped.');
+            };
+            setInterval(() => MayaUnified.update(),450);
+          }
+          '''
+          replace(page, '/* ---- wiring ---- */',
+                  insert + '\n/* ---- wiring ---- */')
+          replace(page,
+              "$('#mic').onclick = () => { if (app.active) endCall(); else startCall(); };",
+              "$('#mic').onclick = () => { if (MayaUnified.enabled()) MayaUnified.toggle(); else { if (MayaUnified.available()) MayaUnified.command('stop'); if (app.active) endCall(); else startCall(); } };")
+          replace(page,
+              "$('#btnStop').onclick = stopSpeaking;",
+              "$('#btnStop').onclick = () => { if(MayaUnified.active) MayaUnified.stop(); else stopSpeaking(); };")
+          replace(page,
+              'async function sendTyped() {\n  const t =',
+              'async function sendTyped() {\n  if(window.MayaUnified && window.MayaUnified.active) window.MayaUnified.stop();\n  const t =')
+          replace(page,
+              '  if (MayaUnified.enabled()) MayaUnified.toggle();',
+              '  if (MayaUnified.enabled()) MayaUnified.toggle();') if False else None
+          replace(page,
+              '/* ---- wiring ---- */',
+              'window.MayaUnified = MayaUnified;\n/* ---- wiring ---- */')
+
+          # Change launcher: show only the original Maya WebView activity.
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          ns = 'http://schemas.android.com/apk/res/android'
+          ET.register_namespace('android',ns)
+          key = '{' + ns + '}'
+          doc = ET.parse(manifest)
+          application = doc.getroot().find('application')
+          classic = None
+          for activity in application.findall('activity'):
+              name = activity.get(key+'name','')
+              if name in ('.MainActivity','com.tanim.maya2.MainActivity'):
+                  classic = activity
+              if name.endswith('.aaiyra.ui.MainActivity'):
+                  for fil in list(activity.findall('intent-filter')):
+                      if any(x.get(key+'name') ==
+                             'android.intent.category.LAUNCHER'
+                             for x in fil.findall('category')):
+                          activity.remove(fil)
+          if classic is None:
+              raise SystemExit('Cannot locate original Maya activity')
+          if not any(
+              any(cat.get(key+'name') == 'android.intent.category.LAUNCHER'
+                  for cat in fil.findall('category'))
+              for fil in classic.findall('intent-filter')
+          ):
+              fil = ET.SubElement(classic,'intent-filter')
+              ET.SubElement(fil,'action',
+                            {key+'name':'android.intent.action.MAIN'})
+              ET.SubElement(fil,'category',
+                            {key+'name':'android.intent.category.LAUNCHER'})
+          classic.set(key+'exported','true')
+          doc.write(manifest,encoding='utf-8',xml_declaration=True)
+
+          # Original neon Maya launcher icon, made without paid assets.
+          def icon(size):
+              def distance(px,py,ax,ay,bx,by):
+                  dx,dy=bx-ax,by-ay
+                  t=max(0,min(1,((px-ax)*dx+(py-ay)*dy)/(dx*dx+dy*dy)))
+                  return math.hypot(px-ax-t*dx,py-ay-t*dy)
+              seg=[(157,361,209,158),(209,158,256,294),
+                   (256,294,304,158),(304,158,355,361)]
+              raw=bytearray()
+              for y in range(size):
+                  raw.append(0)
+                  py=(y+0.5)*512/size
+                  for x in range(size):
+                      px=(x+0.5)*512/size
+                      r=math.hypot(px-256,py-256)
+                      d=min(distance(px,py,*s) for s in seg)
+                      glow=max(0,1-d/55)
+                      ring=max(0,1-abs(r-204)/22)
+                      heartx=(px-374)/32
+                      hearty=(py-132)/32
+                      heart=((heartx*heartx+hearty*hearty-1)**3
+                             -heartx*heartx*hearty**3)<0
+                      red=int(min(255,9+110*glow+80*ring))
+                      green=int(min(255,5+20*glow+38*ring))
+                      blue=int(min(255,24+100*glow+100*ring))
+                      if d<12 or heart:
+                          red,green,blue=255,117,223
+                      raw.extend((red,green,blue,255))
+              def chunk(tag,data):
+                  return (struct.pack('!I',len(data))+tag+data+
+                          struct.pack('!I',zlib.crc32(tag+data)&0xffffffff))
+              body=(b'\x89PNG\r\n\x1a\n' +
+                    chunk(b'IHDR',struct.pack('!2I5B',size,size,8,6,0,0,0))+
+                    chunk(b'IDAT',zlib.compress(bytes(raw),9))+
+                    chunk(b'IEND',b''))
+              return body
+
+          assets = Path('android/app/src/main/assets/public')
+          assets.mkdir(parents=True,exist_ok=True)
+          for size in (192,512):
+              data=icon(size)
+              for folder in (Path('www'),assets):
+                  (folder/f'icon-{size}.png').write_bytes(data)
+
+          sizes={'mdpi':48,'hdpi':72,'xhdpi':96,
+                 'xxhdpi':144,'xxxhdpi':192}
+          res=Path('android/app/src/main/res')
+          for density,size in sizes.items():
+              folder=res/('mipmap-'+density)
+              folder.mkdir(parents=True,exist_ok=True)
+              for name in ('ic_launcher','ic_launcher_round',
+                           'ic_launcher_foreground'):
+                  for obsolete in folder.glob(name+'.webp'):
+                      obsolete.unlink()
+                  (folder/(name+'.png')).write_bytes(icon(size))
+
+          for folder in (Path('www'),assets):
+              mf=folder/'manifest.webmanifest'
+              if mf.exists():
+                  m=json.loads(mf.read_text(encoding='utf-8'))
+                  m['name']='Maya'
+                  m['short_name']='Maya'
+                  mf.write_text(json.dumps(m,indent=2),encoding='utf-8')
+
+          strings=res/'values/strings.xml'
+          if strings.exists():
+              text=strings.read_text(encoding='utf-8')
+              text=re.sub(r'(<string name="app_name">).*?(</string>)',
+                          r'\1Maya\2',text)
+              strings.write_text(text,encoding='utf-8')
+
+          print('Unified Maya launcher, native voice bridge, wake controls and icons installed')
+          PYUNIFY
+
       - name: Fix Maya WebView microphone permissions
         run: |
           python3 - <<'PYFIX'
