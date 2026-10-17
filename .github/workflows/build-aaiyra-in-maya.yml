@@ -322,7 +322,7 @@ jobs:
                   ('Aaiyra wake trained', 'Maya wake trained'),
                   ('Waiting for Aaiyra', 'Waiting for Maya'),
                   ('Maya • Aaiyra Native Voice', 'Maya Native Voice'),
-                  ('Maya â¢ Aaiyra Native Voice', 'Maya Native Voice')
+                  
               ]:
                   t = t.replace(before, after)
               p.write_text(t, encoding='utf-8')
